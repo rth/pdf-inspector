@@ -2,6 +2,7 @@
 name = "pdf-inspector"
 version = "0.1.0"
 edition = "2021"
+autobins = false
 authors = ["Firecrawl Team"]
 description = "Fast PDF inspection, classification, and text extraction with smart scanned vs text-based detection"
 license = "MIT"
