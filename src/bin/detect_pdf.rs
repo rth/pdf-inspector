@@ -24,8 +24,13 @@ fn main() {
             let elapsed = start.elapsed();
 
             if json_output {
+                let ocr_pages: Vec<String> = result
+                    .pages_needing_ocr
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect();
                 println!(
-                    r#"{{"pdf_type":"{}","page_count":{},"pages_sampled":{},"pages_with_text":{},"confidence":{:.2},"title":{},"ocr_recommended":{},"detection_time_ms":{}}}"#,
+                    r#"{{"pdf_type":"{}","page_count":{},"pages_sampled":{},"pages_with_text":{},"confidence":{:.2},"title":{},"ocr_recommended":{},"pages_needing_ocr":[{}],"detection_time_ms":{}}}"#,
                     match result.pdf_type {
                         PdfType::TextBased => "text_based",
                         PdfType::Scanned => "scanned",
@@ -42,6 +47,7 @@ fn main() {
                         .map(|t| format!("\"{}\"", t.replace('"', "\\\"")))
                         .unwrap_or_else(|| "null".to_string()),
                     result.ocr_recommended,
+                    ocr_pages.join(","),
                     elapsed.as_millis()
                 );
             } else {
@@ -67,6 +73,16 @@ fn main() {
                     "OCR recommended: {}",
                     if result.ocr_recommended { "YES" } else { "NO" }
                 );
+                if !result.pages_needing_ocr.is_empty() {
+                    if result.pages_needing_ocr.len() == result.page_count as usize {
+                        println!("Pages needing OCR: all (of {})", result.page_count);
+                    } else {
+                        println!(
+                            "Pages needing OCR: {:?} (of {})",
+                            result.pages_needing_ocr, result.page_count
+                        );
+                    }
+                }
                 if let Some(title) = &result.title {
                     println!("Title: {}", title);
                 }

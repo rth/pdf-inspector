@@ -43,8 +43,13 @@ fn main() {
                     })
                     .unwrap_or_default();
 
+                let ocr_pages: Vec<String> = result
+                    .pages_needing_ocr
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect();
                 println!(
-                    r#"{{"pdf_type":"{}","page_count":{},"has_text":{},"processing_time_ms":{},"markdown_length":{},"markdown":"{}"}}"#,
+                    r#"{{"pdf_type":"{}","page_count":{},"has_text":{},"processing_time_ms":{},"markdown_length":{},"pages_needing_ocr":[{}],"markdown":"{}"}}"#,
                     match result.pdf_type {
                         PdfType::TextBased => "text_based",
                         PdfType::Scanned => "scanned",
@@ -55,6 +60,7 @@ fn main() {
                     result.text.is_some(),
                     result.processing_time_ms,
                     result.markdown.as_ref().map(|m| m.len()).unwrap_or(0),
+                    ocr_pages.join(","),
                     md_escaped
                 );
             } else if raw_output {
@@ -120,7 +126,11 @@ fn main() {
 
                         if let Some(markdown) = &result.markdown {
                             eprintln!();
-                            eprintln!("Note: Some pages may contain images that require OCR.");
+                            if result.pages_needing_ocr.is_empty() {
+                                eprintln!("Note: Some pages may contain images that require OCR.");
+                            } else {
+                                eprintln!("Pages needing OCR: {:?}", result.pages_needing_ocr);
+                            }
                             eprintln!();
 
                             if let Some(output) = output_file {

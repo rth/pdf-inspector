@@ -31,6 +31,8 @@ pub struct PdfProcessResult {
     pub page_count: u32,
     /// Processing time in milliseconds
     pub processing_time_ms: u64,
+    /// 1-indexed page numbers that need OCR.
+    pub pages_needing_ocr: Vec<u32>,
 }
 
 /// Process a PDF file with smart detection and extraction
@@ -46,29 +48,34 @@ pub fn process_pdf<P: AsRef<Path>>(path: P) -> Result<PdfProcessResult, PdfError
 
     // Step 1: Smart detection (fast, no full load)
     let detection = detect_pdf_type(&path)?;
+    let page_count = detection.page_count;
+    let pdf_type = detection.pdf_type;
+    let pages_needing_ocr = detection.pages_needing_ocr;
 
-    let result = match detection.pdf_type {
+    let result = match pdf_type {
         PdfType::TextBased => {
             // Step 2: Full extraction with position-aware reading order
             let items = extract_text_with_positions(&path)?;
             let markdown = to_markdown_from_items(items, MarkdownOptions::default());
 
             PdfProcessResult {
-                pdf_type: PdfType::TextBased,
+                pdf_type,
                 text: None, // We now produce markdown directly
                 markdown: Some(markdown),
-                page_count: detection.page_count,
+                page_count,
                 processing_time_ms: start.elapsed().as_millis() as u64,
+                pages_needing_ocr,
             }
         }
         PdfType::Scanned | PdfType::ImageBased => {
             // Return early - OCR needed
             PdfProcessResult {
-                pdf_type: detection.pdf_type,
+                pdf_type,
                 text: None,
                 markdown: None,
-                page_count: detection.page_count,
+                page_count,
                 processing_time_ms: start.elapsed().as_millis() as u64,
+                pages_needing_ocr,
             }
         }
         PdfType::Mixed => {
@@ -77,11 +84,12 @@ pub fn process_pdf<P: AsRef<Path>>(path: P) -> Result<PdfProcessResult, PdfError
             let markdown = items.map(|i| to_markdown_from_items(i, MarkdownOptions::default()));
 
             PdfProcessResult {
-                pdf_type: PdfType::Mixed,
+                pdf_type,
                 text: None,
                 markdown,
-                page_count: detection.page_count,
+                page_count,
                 processing_time_ms: start.elapsed().as_millis() as u64,
+                pages_needing_ocr,
             }
         }
     };
@@ -97,38 +105,44 @@ pub fn process_pdf_mem(buffer: &[u8]) -> Result<PdfProcessResult, PdfError> {
 
     // Step 1: Smart detection (fast, no full load)
     let detection = detector::detect_pdf_type_mem(buffer)?;
+    let page_count = detection.page_count;
+    let pdf_type = detection.pdf_type;
+    let pages_needing_ocr = detection.pages_needing_ocr;
 
-    let result = match detection.pdf_type {
+    let result = match pdf_type {
         PdfType::TextBased => {
             // Step 2: Full extraction with position-aware reading order
             let items = extractor::extract_text_with_positions_mem(buffer)?;
             let markdown = to_markdown_from_items(items, MarkdownOptions::default());
 
             PdfProcessResult {
-                pdf_type: PdfType::TextBased,
+                pdf_type,
                 text: None,
                 markdown: Some(markdown),
-                page_count: detection.page_count,
+                page_count,
                 processing_time_ms: start.elapsed().as_millis() as u64,
+                pages_needing_ocr,
             }
         }
         PdfType::Scanned | PdfType::ImageBased => PdfProcessResult {
-            pdf_type: detection.pdf_type,
+            pdf_type,
             text: None,
             markdown: None,
-            page_count: detection.page_count,
+            page_count,
             processing_time_ms: start.elapsed().as_millis() as u64,
+            pages_needing_ocr,
         },
         PdfType::Mixed => {
             let items = extractor::extract_text_with_positions_mem(buffer).ok();
             let markdown = items.map(|i| to_markdown_from_items(i, MarkdownOptions::default()));
 
             PdfProcessResult {
-                pdf_type: PdfType::Mixed,
+                pdf_type,
                 text: None,
                 markdown,
-                page_count: detection.page_count,
+                page_count,
                 processing_time_ms: start.elapsed().as_millis() as u64,
+                pages_needing_ocr,
             }
         }
     };

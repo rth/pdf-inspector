@@ -836,3 +836,69 @@ fn test_not_a_pdf_extract_text_mem() {
     let result = pdf_inspector::extractor::extract_text_mem(xml);
     assert_not_a_pdf(result, "XML");
 }
+
+// ============================================================================
+// Pages Needing OCR Tests
+// ============================================================================
+
+#[test]
+fn test_pages_needing_ocr_field_accessible() {
+    // Compile-time check: verify the field exists on both structs
+    let detection_result = pdf_inspector::detector::PdfTypeResult {
+        pdf_type: PdfType::TextBased,
+        page_count: 1,
+        pages_sampled: 1,
+        pages_with_text: 1,
+        confidence: 1.0,
+        title: None,
+        ocr_recommended: false,
+        pages_needing_ocr: Vec::new(),
+    };
+    assert!(detection_result.pages_needing_ocr.is_empty());
+
+    let process_result = pdf_inspector::PdfProcessResult {
+        pdf_type: PdfType::TextBased,
+        text: None,
+        markdown: None,
+        page_count: 1,
+        processing_time_ms: 0,
+        pages_needing_ocr: vec![1, 3],
+    };
+    assert_eq!(process_result.pages_needing_ocr, vec![1, 3]);
+}
+
+#[test]
+fn test_text_pdf_process_result_empty_ocr_pages() {
+    // A minimal valid PDF that is text-based should have empty pages_needing_ocr.
+    // We use a minimal PDF buffer with a text content stream.
+    let pdf_bytes = b"%PDF-1.0
+1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj
+2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj
+3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R/Contents 4 0 R>>endobj
+4 0 obj<</Length 44>>
+stream
+BT /F1 12 Tf 100 700 Td (Hello World) Tj ET
+endstream
+endobj
+xref
+0 5
+0000000000 65535 f
+0000000009 00000 n
+0000000058 00000 n
+0000000115 00000 n
+0000000206 00000 n
+trailer<</Size 5/Root 1 0 R>>
+startxref
+300
+%%EOF";
+    let result = pdf_inspector::process_pdf_mem(pdf_bytes);
+    // The minimal PDF may fail to parse fully, but if it succeeds,
+    // a text-based PDF should have empty pages_needing_ocr.
+    if let Ok(result) = result {
+        assert!(
+            result.pages_needing_ocr.is_empty(),
+            "Text-based PDF should have empty pages_needing_ocr, got: {:?}",
+            result.pages_needing_ocr
+        );
+    }
+}

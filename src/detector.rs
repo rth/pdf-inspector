@@ -6,6 +6,7 @@
 
 use crate::PdfError;
 use lopdf::{Document, Object, ObjectId};
+use std::collections::HashMap;
 use std::path::Path;
 
 /// PDF type classification
@@ -39,6 +40,9 @@ pub struct PdfTypeResult {
     /// Whether OCR is recommended for better extraction
     /// True when images provide essential context (e.g., template-based PDFs)
     pub ocr_recommended: bool,
+    /// 1-indexed page numbers that need OCR (image-only or insufficient text).
+    /// Empty for TextBased. All pages for Scanned/ImageBased. Specific pages for Mixed.
+    pub pages_needing_ocr: Vec<u32>,
 }
 
 /// Configuration for PDF type detection
@@ -150,6 +154,9 @@ fn detect_from_document(
     let mut pages_with_template_images = 0u32;
     let mut total_text_ops = 0u32;
 
+    // Cache Phase 1 results to avoid re-analyzing sampled pages in Phase 2
+    let mut analysis_cache: HashMap<u32, PageAnalysis> = HashMap::new();
+
     for page_num in &sample_indices {
         if let Some(&page_id) = pages.get(page_num) {
             let analysis = analyze_page_content(doc, page_id);
@@ -163,6 +170,7 @@ fn detect_from_document(
                 pages_with_template_images += 1;
             }
             total_text_ops += analysis.text_operator_count;
+            analysis_cache.insert(*page_num, analysis);
         }
     }
 
@@ -214,6 +222,30 @@ fn detect_from_document(
         (PdfType::TextBased, text_ratio.max(0.5))
     };
 
+    // Phase 2: Build per-page OCR list
+    let pages_needing_ocr = match pdf_type {
+        PdfType::TextBased => Vec::new(),
+        PdfType::Scanned | PdfType::ImageBased => (1..=total_pages).collect(),
+        PdfType::Mixed => {
+            let mut ocr_pages = Vec::new();
+            for page_num in 1..=total_pages {
+                let analysis = if let Some(cached) = analysis_cache.get(&page_num) {
+                    cached.clone()
+                } else if let Some(&page_id) = pages.get(&page_num) {
+                    analyze_page_content(doc, page_id)
+                } else {
+                    continue;
+                };
+                if analysis.text_operator_count < config.min_text_ops_per_page
+                    && (analysis.has_images || analysis.has_template_image)
+                {
+                    ocr_pages.push(page_num);
+                }
+            }
+            ocr_pages
+        }
+    };
+
     // Try to get title from metadata
     let title = get_document_title(doc);
 
@@ -225,10 +257,12 @@ fn detect_from_document(
         confidence,
         title,
         ocr_recommended,
+        pages_needing_ocr,
     })
 }
 
 /// Page content analysis result
+#[derive(Clone)]
 struct PageAnalysis {
     text_operator_count: u32,
     has_images: bool,
