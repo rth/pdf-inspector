@@ -1093,7 +1093,7 @@ fn extract_page_text_items(
     // Marked content (ActualText) tracking
     let mut marked_content_stack: Vec<Option<String>> = Vec::new();
     let mut suppress_glyph_extraction = false;
-    let mut actual_text_emitted = false;
+    let mut actual_text_start_tm: Option<[f32; 6]> = None; // text matrix at BDC entry
 
     for op in &content.operations {
         match op.operator.as_str() {
@@ -1227,34 +1227,8 @@ fn extract_page_text_items(
                         get_operand_bytes(&op.operands[0])
                             .map(|raw| compute_string_width_ts(raw, fi, current_font_size))
                     });
-                    // ActualText: emit replacement text once, then suppress glyphs
+                    // ActualText: suppress glyph extraction, just advance text matrix
                     if suppress_glyph_extraction {
-                        if !actual_text_emitted {
-                            if let Some(at) = marked_content_stack.iter().rev().flatten().next() {
-                                let rendered_size =
-                                    effective_font_size(current_font_size, &text_matrix);
-                                let combined = multiply_matrices(&text_matrix, &ctm);
-                                let base_font = font_base_names
-                                    .get(&current_font)
-                                    .map(|s| s.as_str())
-                                    .unwrap_or(&current_font);
-                                items.push(TextItem {
-                                    text: at.clone(),
-                                    x: combined[4],
-                                    y: combined[5],
-                                    width: 0.0,
-                                    height: rendered_size,
-                                    font: current_font.clone(),
-                                    font_size: rendered_size,
-                                    page: page_num,
-                                    is_bold: is_bold_font(base_font),
-                                    is_italic: is_italic_font(base_font),
-                                    item_type: ItemType::Text,
-                                });
-                            }
-                            actual_text_emitted = true;
-                        }
-                        // Still advance text matrix
                         if let Some(w_ts) = w_ts_opt {
                             text_matrix[4] += w_ts * text_matrix[0];
                             text_matrix[5] += w_ts * text_matrix[1];
@@ -1319,33 +1293,6 @@ fn extract_page_text_items(
                         let font_info = font_widths.get(&current_font);
                         let is_invisible =
                             fill_is_white || text_rendering_mode == 3 || suppress_glyph_extraction;
-
-                        // Emit ActualText once for the entire TJ array
-                        if suppress_glyph_extraction && !actual_text_emitted {
-                            if let Some(at) = marked_content_stack.iter().rev().flatten().next() {
-                                let rendered_size =
-                                    effective_font_size(current_font_size, &text_matrix);
-                                let combined = multiply_matrices(&text_matrix, &ctm);
-                                let base_font = font_base_names
-                                    .get(&current_font)
-                                    .map(|s| s.as_str())
-                                    .unwrap_or(&current_font);
-                                items.push(TextItem {
-                                    text: at.clone(),
-                                    x: combined[4],
-                                    y: combined[5],
-                                    width: 0.0,
-                                    height: rendered_size,
-                                    font: current_font.clone(),
-                                    font_size: rendered_size,
-                                    page: page_num,
-                                    is_bold: is_bold_font(base_font),
-                                    is_italic: is_italic_font(base_font),
-                                    item_type: ItemType::Text,
-                                });
-                            }
-                            actual_text_emitted = true;
-                        }
 
                         // Compute space threshold based on font metrics when available
                         let space_threshold = if let Some(font_info) = font_info {
@@ -1502,30 +1449,7 @@ fn extract_page_text_items(
                 line_matrix[4] += (-tl) * line_matrix[2];
                 line_matrix[5] += (-tl) * line_matrix[3];
                 text_matrix = line_matrix;
-                if suppress_glyph_extraction && !actual_text_emitted {
-                    if let Some(at) = marked_content_stack.iter().rev().flatten().next() {
-                        let rendered_size = effective_font_size(current_font_size, &text_matrix);
-                        let combined = multiply_matrices(&text_matrix, &ctm);
-                        let base_font = font_base_names
-                            .get(&current_font)
-                            .map(|s| s.as_str())
-                            .unwrap_or(&current_font);
-                        items.push(TextItem {
-                            text: at.clone(),
-                            x: combined[4],
-                            y: combined[5],
-                            width: 0.0,
-                            height: rendered_size,
-                            font: current_font.clone(),
-                            font_size: rendered_size,
-                            page: page_num,
-                            is_bold: is_bold_font(base_font),
-                            is_italic: is_italic_font(base_font),
-                            item_type: ItemType::Text,
-                        });
-                    }
-                    actual_text_emitted = true;
-                } else if !(fill_is_white
+                if !(fill_is_white
                     || text_rendering_mode == 3
                     || suppress_glyph_extraction
                     || op.operands.is_empty())
@@ -1612,18 +1536,43 @@ fn extract_page_text_items(
                 }
                 if actual_text.is_some() {
                     suppress_glyph_extraction = true;
-                    actual_text_emitted = false;
+                    actual_text_start_tm = Some(text_matrix);
                 }
                 marked_content_stack.push(actual_text);
             }
             "EMC" => {
-                // End Marked Content
-                if let Some(popped) = marked_content_stack.pop() {
-                    if popped.is_some() {
-                        suppress_glyph_extraction =
-                            marked_content_stack.iter().any(|a| a.is_some());
-                        actual_text_emitted = false;
+                // End Marked Content — emit ActualText item with correct width
+                if let Some(Some(at)) = marked_content_stack.pop() {
+                    // Compute width from text matrix advancement during BDC..EMC
+                    if let Some(start_tm) = actual_text_start_tm.take() {
+                        let rendered_size = effective_font_size(current_font_size, &start_tm);
+                        let combined = multiply_matrices(&start_tm, &ctm);
+                        let (x, y) = (combined[4], combined[5]);
+                        // Width in device space from text matrix delta
+                        let delta_ts = text_matrix[4] - start_tm[4];
+                        let scale_x = start_tm[0] * ctm[0] + start_tm[1] * ctm[2];
+                        let width = (delta_ts * scale_x).abs();
+                        if !at.trim().is_empty() {
+                            let base_font = font_base_names
+                                .get(&current_font)
+                                .map(|s| s.as_str())
+                                .unwrap_or(&current_font);
+                            items.push(TextItem {
+                                text: at,
+                                x,
+                                y,
+                                width,
+                                height: rendered_size,
+                                font: current_font.clone(),
+                                font_size: rendered_size,
+                                page: page_num,
+                                is_bold: is_bold_font(base_font),
+                                is_italic: is_italic_font(base_font),
+                                item_type: ItemType::Text,
+                            });
+                        }
                     }
+                    suppress_glyph_extraction = marked_content_stack.iter().any(|a| a.is_some());
                 }
             }
             _ => {}
