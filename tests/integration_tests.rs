@@ -1,6 +1,6 @@
 //! Integration tests for pdf-to-markdown library
 
-use pdf_inspector::detector::DetectionConfig;
+use pdf_inspector::detector::{DetectionConfig, ScanStrategy};
 use pdf_inspector::extractor::{group_into_lines, TextLine};
 use pdf_inspector::{
     detect_pdf_type, extract_text, extract_text_with_positions, to_markdown, MarkdownOptions,
@@ -56,7 +56,7 @@ fn make_text_item_with_font(
 #[test]
 fn test_detection_config_default() {
     let config = DetectionConfig::default();
-    assert_eq!(config.max_pages_to_sample, u32::MAX);
+    assert!(matches!(config.strategy, ScanStrategy::EarlyExit));
     assert_eq!(config.min_text_ops_per_page, 3);
     assert!((config.text_page_ratio_threshold - 0.6).abs() < 0.001);
 }
@@ -64,11 +64,11 @@ fn test_detection_config_default() {
 #[test]
 fn test_detection_config_custom() {
     let config = DetectionConfig {
-        max_pages_to_sample: 10,
+        strategy: ScanStrategy::Sample(10),
         min_text_ops_per_page: 5,
         text_page_ratio_threshold: 0.8,
     };
-    assert_eq!(config.max_pages_to_sample, 10);
+    assert!(matches!(config.strategy, ScanStrategy::Sample(10)));
     assert_eq!(config.min_text_ops_per_page, 5);
     assert!((config.text_page_ratio_threshold - 0.8).abs() < 0.001);
 }

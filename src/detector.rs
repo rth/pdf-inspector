@@ -22,6 +22,23 @@ pub enum PdfType {
     Mixed,
 }
 
+/// Strategy for which pages to scan during detection
+#[derive(Debug, Clone)]
+pub enum ScanStrategy {
+    /// Scan all pages, stop on first non-text page (current default).
+    /// Best for pipelines that route TextBased PDFs to fast extraction.
+    EarlyExit,
+    /// Scan all pages, no early exit.
+    /// Best when you need accurate Mixed vs Scanned classification.
+    Full,
+    /// Sample up to N evenly distributed pages (first, last, middle).
+    /// Best for very large PDFs where speed matters more than precision.
+    Sample(u32),
+    /// Only scan these specific 1-indexed page numbers.
+    /// Best when the caller knows which pages to check.
+    Pages(Vec<u32>),
+}
+
 /// Result of PDF type detection
 #[derive(Debug)]
 pub struct PdfTypeResult {
@@ -48,8 +65,8 @@ pub struct PdfTypeResult {
 /// Configuration for PDF type detection
 #[derive(Debug, Clone)]
 pub struct DetectionConfig {
-    /// Maximum number of pages to sample (default: 5)
-    pub max_pages_to_sample: u32,
+    /// Strategy for which pages to scan
+    pub strategy: ScanStrategy,
     /// Minimum text operator count per page to consider as text-based
     pub min_text_ops_per_page: u32,
     /// Threshold ratio of text pages to total pages for classification
@@ -59,7 +76,7 @@ pub struct DetectionConfig {
 impl Default for DetectionConfig {
     fn default() -> Self {
         Self {
-            max_pages_to_sample: u32::MAX,
+            strategy: ScanStrategy::EarlyExit,
             min_text_ops_per_page: 3,
             text_page_ratio_threshold: 0.6,
         }
@@ -118,35 +135,24 @@ fn detect_from_document(
     let pages = doc.get_pages();
     let total_pages = pages.len() as u32;
 
-    // Sample pages for text operator detection
-    let pages_to_sample = std::cmp::min(config.max_pages_to_sample, total_pages);
-
-    // Sample strategy: first page, last page, and evenly distributed pages
-    let sample_indices: Vec<u32> = if pages_to_sample >= total_pages {
-        (1..=total_pages).collect()
-    } else {
-        let mut indices = Vec::with_capacity(pages_to_sample as usize);
-        indices.push(1); // Always sample first page
-
-        if pages_to_sample > 1 {
-            indices.push(total_pages); // Always sample last page
+    // Select pages to scan based on strategy
+    let (sample_indices, allow_early_exit) = match &config.strategy {
+        ScanStrategy::EarlyExit => ((1..=total_pages).collect::<Vec<_>>(), true),
+        ScanStrategy::Full => ((1..=total_pages).collect::<Vec<_>>(), false),
+        ScanStrategy::Sample(max_pages) => {
+            let n = (*max_pages).min(total_pages);
+            (distribute_pages(n, total_pages), false)
         }
-
-        // Add evenly distributed pages in between
-        let remaining = pages_to_sample.saturating_sub(2);
-        if remaining > 0 && total_pages > 2 {
-            let step = (total_pages - 2) / (remaining + 1);
-            for i in 1..=remaining {
-                let idx = 1 + (step * i);
-                if idx > 1 && idx < total_pages && !indices.contains(&idx) {
-                    indices.push(idx);
-                }
-            }
+        ScanStrategy::Pages(pages) => {
+            let mut valid: Vec<u32> = pages
+                .iter()
+                .copied()
+                .filter(|&p| p >= 1 && p <= total_pages)
+                .collect();
+            valid.sort();
+            valid.dedup();
+            (valid, false)
         }
-
-        indices.sort();
-        indices.dedup();
-        indices
     };
 
     let mut pages_with_text = 0u32;
@@ -175,7 +181,8 @@ fn detect_from_document(
 
             // Early exit: if this page is non-text (no text ops but has images),
             // this PDF won't be purely TextBased. Stop scanning remaining pages.
-            if analysis.text_operator_count < config.min_text_ops_per_page
+            if allow_early_exit
+                && analysis.text_operator_count < config.min_text_ops_per_page
                 && (analysis.has_images || analysis.has_template_image)
             {
                 break;
@@ -269,6 +276,41 @@ fn detect_from_document(
         ocr_recommended,
         pages_needing_ocr,
     })
+}
+
+/// Distribute `n` page indices evenly across `total` pages (1-indexed).
+///
+/// Always includes the first and last page, with remaining pages
+/// spaced evenly in between.
+fn distribute_pages(n: u32, total: u32) -> Vec<u32> {
+    if n == 0 {
+        return Vec::new();
+    }
+    if n >= total {
+        return (1..=total).collect();
+    }
+
+    let mut indices = Vec::with_capacity(n as usize);
+    indices.push(1);
+
+    if n > 1 {
+        indices.push(total);
+    }
+
+    let remaining = n.saturating_sub(2);
+    if remaining > 0 && total > 2 {
+        let step = (total - 2) / (remaining + 1);
+        for i in 1..=remaining {
+            let idx = 1 + (step * i);
+            if idx > 1 && idx < total && !indices.contains(&idx) {
+                indices.push(idx);
+            }
+        }
+    }
+
+    indices.sort();
+    indices.dedup();
+    indices
 }
 
 /// Page content analysis result

@@ -12,7 +12,10 @@ pub mod markdown;
 pub mod tables;
 pub mod tounicode;
 
-pub use detector::{detect_pdf_type, PdfType, PdfTypeResult};
+pub use detector::{
+    detect_pdf_type, detect_pdf_type_mem, detect_pdf_type_mem_with_config,
+    detect_pdf_type_with_config, DetectionConfig, PdfType, PdfTypeResult, ScanStrategy,
+};
 pub use extractor::{extract_text, extract_text_with_positions, TextItem};
 pub use markdown::{to_markdown, to_markdown_from_items, MarkdownOptions};
 
@@ -109,6 +112,68 @@ pub fn process_pdf<P: AsRef<Path>>(path: P) -> Result<PdfProcessResult, PdfError
     Ok(result)
 }
 
+/// Process a PDF file with custom detection configuration
+pub fn process_pdf_with_config<P: AsRef<Path>>(
+    path: P,
+    config: DetectionConfig,
+) -> Result<PdfProcessResult, PdfError> {
+    let start = std::time::Instant::now();
+
+    validate_pdf_file(&path)?;
+
+    let detection = detect_pdf_type_with_config(&path, config)?;
+    let page_count = detection.page_count;
+    let pdf_type = detection.pdf_type;
+    let pages_needing_ocr = detection.pages_needing_ocr;
+    let title = detection.title;
+    let confidence = detection.confidence;
+
+    let result = match pdf_type {
+        PdfType::TextBased => {
+            let items = extract_text_with_positions(&path)?;
+            let markdown = to_markdown_from_items(items, MarkdownOptions::default());
+
+            PdfProcessResult {
+                pdf_type,
+                text: None,
+                markdown: Some(markdown),
+                page_count,
+                processing_time_ms: start.elapsed().as_millis() as u64,
+                pages_needing_ocr,
+                title,
+                confidence,
+            }
+        }
+        PdfType::Scanned | PdfType::ImageBased => PdfProcessResult {
+            pdf_type,
+            text: None,
+            markdown: None,
+            page_count,
+            processing_time_ms: start.elapsed().as_millis() as u64,
+            pages_needing_ocr,
+            title,
+            confidence,
+        },
+        PdfType::Mixed => {
+            let items = extract_text_with_positions(&path).ok();
+            let markdown = items.map(|i| to_markdown_from_items(i, MarkdownOptions::default()));
+
+            PdfProcessResult {
+                pdf_type,
+                text: None,
+                markdown,
+                page_count,
+                processing_time_ms: start.elapsed().as_millis() as u64,
+                pages_needing_ocr,
+                title,
+                confidence,
+            }
+        }
+    };
+
+    Ok(result)
+}
+
 /// Process PDF from memory buffer
 pub fn process_pdf_mem(buffer: &[u8]) -> Result<PdfProcessResult, PdfError> {
     let start = std::time::Instant::now();
@@ -126,6 +191,68 @@ pub fn process_pdf_mem(buffer: &[u8]) -> Result<PdfProcessResult, PdfError> {
     let result = match pdf_type {
         PdfType::TextBased => {
             // Step 2: Full extraction with position-aware reading order
+            let items = extractor::extract_text_with_positions_mem(buffer)?;
+            let markdown = to_markdown_from_items(items, MarkdownOptions::default());
+
+            PdfProcessResult {
+                pdf_type,
+                text: None,
+                markdown: Some(markdown),
+                page_count,
+                processing_time_ms: start.elapsed().as_millis() as u64,
+                pages_needing_ocr,
+                title,
+                confidence,
+            }
+        }
+        PdfType::Scanned | PdfType::ImageBased => PdfProcessResult {
+            pdf_type,
+            text: None,
+            markdown: None,
+            page_count,
+            processing_time_ms: start.elapsed().as_millis() as u64,
+            pages_needing_ocr,
+            title,
+            confidence,
+        },
+        PdfType::Mixed => {
+            let items = extractor::extract_text_with_positions_mem(buffer).ok();
+            let markdown = items.map(|i| to_markdown_from_items(i, MarkdownOptions::default()));
+
+            PdfProcessResult {
+                pdf_type,
+                text: None,
+                markdown,
+                page_count,
+                processing_time_ms: start.elapsed().as_millis() as u64,
+                pages_needing_ocr,
+                title,
+                confidence,
+            }
+        }
+    };
+
+    Ok(result)
+}
+
+/// Process PDF from memory buffer with custom detection configuration
+pub fn process_pdf_mem_with_config(
+    buffer: &[u8],
+    config: DetectionConfig,
+) -> Result<PdfProcessResult, PdfError> {
+    let start = std::time::Instant::now();
+
+    validate_pdf_bytes(buffer)?;
+
+    let detection = detector::detect_pdf_type_mem_with_config(buffer, config)?;
+    let page_count = detection.page_count;
+    let pdf_type = detection.pdf_type;
+    let pages_needing_ocr = detection.pages_needing_ocr;
+    let title = detection.title;
+    let confidence = detection.confidence;
+
+    let result = match pdf_type {
+        PdfType::TextBased => {
             let items = extractor::extract_text_with_positions_mem(buffer)?;
             let markdown = to_markdown_from_items(items, MarkdownOptions::default());
 
